@@ -1,4 +1,3 @@
-// const exokit = require('exokit');
 const getContext = require('gl');
 const {
 	WebGLKernel
@@ -22,18 +21,21 @@ class HeadlessGLKernel extends WebGLKernel {
 		testCanvas = null;
 		testExtensions = null;
 		if (typeof getContext !== 'function') return;
-		testContext = getContext(2, 2, {
-			preserveDrawingBuffer: true
-		});
-		testExtensions = {
-			STACKGL_resize_drawingbuffer: testContext.getExtension('STACKGL_resize_drawingbuffer'),
-			STACKGL_destroy_context: testContext.getExtension('STACKGL_destroy_context'),
-			OES_texture_float: testContext.getExtension('OES_texture_float'),
-			OES_texture_float_linear: testContext.getExtension('OES_texture_float_linear'),
-			OES_element_index_uint: testContext.getExtension('OES_element_index_uint'),
-			WEBGL_draw_buffers: testContext.getExtension('WEBGL_draw_buffers'),
-		};
-		features = this.getFeatures();
+		try { // just in case, edge cases
+			testContext = getContext(2, 2, {
+				preserveDrawingBuffer: true
+			});
+			if (!testContext || !testContext.getExtension) return;
+			testExtensions = {
+				STACKGL_resize_drawingbuffer: testContext.getExtension('STACKGL_resize_drawingbuffer'),
+				STACKGL_destroy_context: testContext.getExtension('STACKGL_destroy_context'),
+				OES_texture_float: testContext.getExtension('OES_texture_float'),
+				OES_texture_float_linear: testContext.getExtension('OES_texture_float_linear'),
+				OES_element_index_uint: testContext.getExtension('OES_element_index_uint'),
+				WEBGL_draw_buffers: testContext.getExtension('WEBGL_draw_buffers'),
+			};
+			features = this.getFeatures();
+		} catch (e) {}
 	}
 
 	static isContextMatch(context) {

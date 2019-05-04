@@ -1,5 +1,7 @@
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
+  <meta charset="utf-8">
   <title>SSPS - Chadams Studios</title>
   <script src="../bin/gpu-browser.js"></script>
   <script>
@@ -274,14 +276,6 @@
         loopMaxIterations: this.PCOUNT,
         output: [ this.PCOUNT*3 ],
         pipeline: true,
-        // argumentTypes: {
-        //   particles: 'NumberTexture',
-        //   velocities: 'NumberTexture',
-        //   attrs: 'NumberTexture',
-        //   playerPos: 'Array(3)',
-        //   pullMass: 'Number',
-        //   dt: 'Number'
-        // }
       });
 
       /*
@@ -301,11 +295,6 @@
           pipeline: true,
           constants: { PCOUNT: this.PCOUNT, pitch },
           loopMaxIterations: this.PCOUNT,
-          // argumentTypes: {
-          //   list: 'NumberTexture',
-          //   index: 'Number',
-          //   setv: 'Array(3)'
-          // }
         });
       };
 
@@ -324,11 +313,6 @@
         output: [ this.PCOUNT*3 ],
         pipeline: true,
         loopMaxIterations: this.PCOUNT,
-        // argumentTypes: {
-        //   particles: 'NumberTexture',
-        //   velocities: 'NumberTexture',
-        //   dt: 'Number'
-        // }
       });
 
       this.camRotKernel = this.gpu.createKernel(function(rotLR, rotUD, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
@@ -351,16 +335,6 @@
       }, {
         debug: false,
         output: [ 3 ],
-        // argumentTypes: {
-        //   rotLR: 'Number',
-        //   rotUD: 'Number',
-        //   camCenter: 'Array(3)',
-        //   camDir: 'Array(3)',
-        //   camUp: 'Array(3)',
-        //   camNearWidth: 'Number',
-        //   camFarWidth: 'Number',
-        //   camDist: 'Number'
-        // }
       });
 
       /*
@@ -468,16 +442,6 @@
           },
           loopMaxIterations: 48 * this.PCOUNT,
           output: [this.RSIZE, this.RSIZE],
-          // argumentTypes: {
-          //   hash: 'Array',
-          //   attrs: 'NumberTexture',
-          //   camCenter: 'Array(3)',
-          //   camDir: 'Array(3)',
-          //   camUp: 'Array(3)',
-          //   camNearWidth: 'Number',
-          //   camFarWidth: 'Number',
-          //   camDist: 'Number'
-          // }
         }),
         this.gpu.createKernel(function(positions, camCenter, camDir, camUp, camNearWidth, camFarWidth, camDist) {
           let uv = [this.thread.x / (this.constants.RSIZE-1), this.thread.y / (this.constants.RSIZE-1)];
@@ -652,16 +616,6 @@
           },
           loopMaxIterations: 48 * this.PCOUNT,
           output: [this.RSIZE, this.RSIZE],
-          // argumentTypes: {
-          //   hash: 'Array',
-          //   attrs: 'NumberTexture',
-          //   camCenter: 'Array(3)',
-          //   camDir: 'Array(3)',
-          //   camUp: 'Array(3)',
-          //   camNearWidth: 'Number',
-          //   camFarWidth: 'Number',
-          //   camDist: 'Number'
-          // }
         })
       ];
 
@@ -818,7 +772,7 @@
         return arr[this.thread.x];
       }, {
         debug: false,
-        outputToTexture: false,
+        pipeline: false,
         output: [this.PCOUNT * 3]
       });
 
@@ -1057,7 +1011,6 @@
       // TODO: make all come from GPU, no visit to CPU
       // const camUp = this.normv(this.crossv(this.crossv([this.cam.dir.x, this.cam.dir.y, this.cam.dir.z], [this.cam.up.x, this.cam.up.y, this.cam.up.z]), [this.cam.dir.x, this.cam.dir.y, this.cam.dir.z]));
       // console.log(camUp.toArray());
-      // debugger;
       this.cam.up.x = utmp[0];
       this.cam.up.y = utmp[1];
       this.cam.up.z = utmp[2];
@@ -1075,7 +1028,7 @@
       this.cam.dir.y = ret[1];
       this.cam.dir.z = ret[2];
 
-      dlen = Math.sqrt(this.cam.dir.x*this.cam.dir.x + this.cam.dir.y*this.cam.dir.y + this.cam.dir.z*this.cam.dir.z);
+      var dlen = Math.sqrt(this.cam.dir.x*this.cam.dir.x + this.cam.dir.y*this.cam.dir.y + this.cam.dir.z*this.cam.dir.z);
       this.cam.p.x += (this.cam.dir.x/dlen) * this.move.tFR * dt * 6;
       this.cam.p.y += (this.cam.dir.y/dlen) * this.move.tFR * dt * 6;
       this.cam.p.z += (this.cam.dir.z/dlen) * this.move.tFR * dt * 6;
@@ -1312,7 +1265,7 @@
       out[1] = a[1] / length;
       out[2] = a[2] / length;
       return out;
-    }
+    };
 
     /**
      * Basis quaternions, for your convenience.

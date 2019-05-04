@@ -59,9 +59,11 @@ class CPUFunctionNode extends FunctionNode {
 	 */
 	astReturnStatement(ast, retArr) {
 		if (this.isRootKernel) {
-			retArr.push('kernelResult = ');
+			retArr.push(this.leadingReturnStatement);
 			this.astGeneric(ast.argument, retArr);
-			retArr.push(';');
+			retArr.push(';\n');
+			retArr.push(this.followingReturnStatement);
+			retArr.push('continue;\n');
 		} else if (this.isSubKernel) {
 			retArr.push(`subKernelResult_${ this.name } = `);
 			this.astGeneric(ast.argument, retArr);
@@ -133,9 +135,8 @@ class CPUFunctionNode extends FunctionNode {
 				if (this.constants && this.constants.hasOwnProperty(idtNode.name)) {
 					retArr.push('constants_' + idtNode.name);
 				} else {
-					const name = this.getUserArgumentName(idtNode.name);
-					const type = this.getType(idtNode);
-					if (name && type && this.parent && type !== 'Number' && type !== 'Integer' && type !== 'LiteralInteger') {
+					const name = this.getKernelArgumentName(idtNode.name);
+					if (name) {
 						retArr.push('user_' + name);
 					} else {
 						retArr.push('user_' + idtNode.name);
@@ -461,17 +462,19 @@ class CPUFunctionNode extends FunctionNode {
 				throw this.astErrorOutput('Unexpected expression', mNode);
 		}
 
-		if (type === 'Number' || type === 'Integer') {
-			retArr.push(`${origin}_${name}`);
-			return retArr;
+		// handle simple types
+		switch (type) {
+			case 'Number':
+			case 'Integer':
+			case 'Float':
+			case 'Boolean':
+				retArr.push(`${ origin }_${ name}`);
+				return retArr;
 		}
 
+		// handle more complex types
 		// argument may have come from a parent
-		let synonymName;
-		if (this.parent) {
-			synonymName = this.getUserArgumentName(name);
-		}
-
+		const synonymName = this.getKernelArgumentName(name);
 		const markupName = `${origin}_${synonymName || name}`;
 
 		switch (type) {
@@ -479,6 +482,9 @@ class CPUFunctionNode extends FunctionNode {
 			case 'Array(3)':
 			case 'Array(4)':
 			case 'HTMLImageArray':
+			case 'ArrayTexture(1)':
+			case 'ArrayTexture(2)':
+			case 'ArrayTexture(3)':
 			case 'ArrayTexture(4)':
 			case 'HTMLImage':
 			default:
@@ -614,10 +620,6 @@ class CPUFunctionNode extends FunctionNode {
 	astDebuggerStatement(arrNode, retArr) {
 		retArr.push('debugger;');
 		return retArr;
-	}
-
-	varWarn() {
-		console.warn('var declarations are not supported, weird things happen.  Use const or let');
 	}
 }
 

@@ -8,6 +8,7 @@ const localPrefix = 'this.';
 
 /**
  * @desc [INTERNAL] Takes in a function node, and does all the AST voodoo required to toString its respective WebGL code
+ * @extends FunctionNode
  * @returns the converted WebGL function string
  */
 class WebGLFunctionNode extends FunctionNode {
@@ -26,19 +27,33 @@ class WebGLFunctionNode extends FunctionNode {
 	 * @returns {Array} the append retArr
 	 */
 	astFunctionExpression(ast, retArr) {
-
 		// Setup function return type and name
 		if (this.isRootKernel) {
 			retArr.push('void');
 		} else {
+			// looking up return type, this is a little expensive, and can be avoided if returnType is set
+			if (!this.returnType) {
+				const lastReturn = this.findLastReturn();
+				if (lastReturn) {
+					this.returnType = this.getType(ast.body);
+					if (this.returnType === 'LiteralInteger') {
+						this.returnType = 'Number';
+					}
+				}
+			}
+
 			const {
 				returnType
 			} = this;
-			const type = typeMap[returnType];
-			if (!type) {
-				throw new Error(`unknown type ${ returnType }`);
+			if (!returnType) {
+				retArr.push('void');
+			} else {
+				const type = typeMap[returnType];
+				if (!type) {
+					throw new Error(`unknown type ${returnType}`);
+				}
+				retArr.push(type);
 			}
-			retArr.push(type);
 		}
 		retArr.push(' ');
 		retArr.push(this.name);
@@ -93,7 +108,16 @@ class WebGLFunctionNode extends FunctionNode {
 
 		const result = [];
 
+		if (!this.returnType) {
+			if (this.isRootKernel) {
+				this.returnType = 'Number';
+			} else {
+				this.returnType = type;
+			}
+		}
+
 		switch (this.returnType) {
+			case 'LiteralInteger':
 			case 'Number':
 			case 'Float':
 				switch (type) {
@@ -139,10 +163,11 @@ class WebGLFunctionNode extends FunctionNode {
 			case 'Array(4)':
 			case 'Array(3)':
 			case 'Array(2)':
+			case 'Input':
 				this.astGeneric(ast.argument, result);
 				break;
 			default:
-				throw this.astErrorOutput('Unknown return handler', ast);
+				throw this.astErrorOutput(`unhandled return type ${this.returnType}`, ast);
 		}
 
 		if (this.isRootKernel) {
@@ -166,7 +191,6 @@ class WebGLFunctionNode extends FunctionNode {
 	 * @returns {Array} the append retArr
 	 */
 	astLiteral(ast, retArr) {
-
 		// Reject non numeric literals
 		if (isNaN(ast.value)) {
 			throw this.astErrorOutput(
@@ -378,7 +402,7 @@ class WebGLFunctionNode extends FunctionNode {
 					break;
 				case 'LiteralInteger & Float':
 				case 'LiteralInteger & Number':
-					if (this.isState('in-for-loop-test') || this.isState('in-for-loop-init')) {
+					if (this.isState('in-for-loop-test') || this.isState('in-for-loop-init') || this.isState('casting-to-integer')) {
 						this.pushState('casting-to-integer');
 						this.astGeneric(ast.left, retArr);
 						retArr.push(operatorMap[ast.operator] || ast.operator);
@@ -401,6 +425,13 @@ class WebGLFunctionNode extends FunctionNode {
 					retArr.push(operatorMap[ast.operator] || ast.operator);
 					this.astGeneric(ast.right, retArr);
 					break;
+
+				case 'Boolean & Boolean':
+					this.astGeneric(ast.left, retArr);
+					retArr.push(operatorMap[ast.operator] || ast.operator);
+					this.astGeneric(ast.right, retArr);
+					break;
+
 				default:
 					throw this.astErrorOutput(`Unhandled binary expression between ${key}`, ast);
 			}
@@ -421,11 +452,19 @@ class WebGLFunctionNode extends FunctionNode {
 			throw this.astErrorOutput('IdentifierExpression - not an Identifier', idtNode);
 		}
 
+		const type = this.getType(idtNode);
+
 		if (idtNode.name === 'Infinity') {
 			// https://stackoverflow.com/a/47543127/1324039
 			retArr.push('3.402823466e+38');
+		} else if (type === 'Boolean') {
+			if (this.argumentNames.indexOf(idtNode.name) > -1) {
+				retArr.push(`bool(user_${idtNode.name})`);
+			} else {
+				retArr.push(`user_${idtNode.name}`);
+			}
 		} else {
-			const userArgumentName = this.getUserArgumentName(idtNode.name);
+			const userArgumentName = this.getKernelArgumentName(idtNode.name);
 			if (userArgumentName) {
 				retArr.push(`user_${userArgumentName}`);
 			} else {
@@ -617,6 +656,9 @@ class WebGLFunctionNode extends FunctionNode {
 	 * @returns {Array} the append retArr
 	 */
 	astVariableDeclaration(varDecNode, retArr) {
+		if (varDecNode.kind === 'var') {
+			this.varWarn();
+		}
 		const declarations = varDecNode.declarations;
 		if (!declarations || !declarations[0] || !declarations[0].init) {
 			throw this.astErrorOutput('Unexpected expression', varDecNode);
@@ -801,6 +843,7 @@ class WebGLFunctionNode extends FunctionNode {
 			case 'value[]':
 			case 'value[][]':
 			case 'value[][][]':
+			case 'value[][][][]':
 			case 'value.value':
 				if (origin === 'Math') {
 					retArr.push(Math[name]);
@@ -825,9 +868,16 @@ class WebGLFunctionNode extends FunctionNode {
 			case 'this.constants.value[]':
 			case 'this.constants.value[][]':
 			case 'this.constants.value[][][]':
+			case 'this.constants.value[][][][]':
 				break;
 			case 'fn()[]':
 				this.astCallExpression(mNode.object, retArr);
+				retArr.push('[');
+				retArr.push(this.memberExpressionPropertyMarkup(property));
+				retArr.push(']');
+				return retArr;
+			case '[][]':
+				this.astArrayExpression(mNode.object, retArr);
 				retArr.push('[');
 				retArr.push(this.memberExpressionPropertyMarkup(property));
 				retArr.push(']');
@@ -836,16 +886,21 @@ class WebGLFunctionNode extends FunctionNode {
 				throw this.astErrorOutput('Unexpected expression', mNode);
 		}
 
-		if (type === 'Number' || type === 'Integer') {
-			retArr.push(`${ origin }_${ name}`);
-			return retArr;
+		// handle simple types
+		switch (type) {
+			case 'Number':
+			case 'Integer':
+			case 'Float':
+				retArr.push(`${ origin }_${ name}`);
+				return retArr;
+			case 'Boolean':
+				retArr.push(`bool(${ origin }_${ name})`);
+				return retArr;
 		}
 
+		// handle more complex types
 		// argument may have come from a parent
-		let synonymName;
-		if (this.parent) {
-			synonymName = this.getUserArgumentName(name);
-		}
+		let synonymName = this.getKernelArgumentName(name);
 
 		const markupName = `${origin}_${synonymName || name}`;
 
@@ -864,17 +919,70 @@ class WebGLFunctionNode extends FunctionNode {
 				this.memberExpressionXYZ(xProperty, yProperty, zProperty, retArr);
 				retArr.push(')');
 				break;
+			case 'ArrayTexture(1)':
+				retArr.push(`getFloatFromSampler2D(${ markupName }, ${ markupName }Size, ${ markupName }Dim, `);
+				this.memberExpressionXYZ(xProperty, yProperty, zProperty, retArr);
+				retArr.push(')');
+				break;
+			case 'ArrayTexture(2)':
+				retArr.push(`getVec2FromSampler2D(${ markupName }, ${ markupName }Size, ${ markupName }Dim, `);
+				this.memberExpressionXYZ(xProperty, yProperty, zProperty, retArr);
+				retArr.push(')');
+				break;
+			case 'ArrayTexture(3)':
+				retArr.push(`getVec3FromSampler2D(${ markupName }, ${ markupName }Size, ${ markupName }Dim, `);
+				this.memberExpressionXYZ(xProperty, yProperty, zProperty, retArr);
+				retArr.push(')');
+				break;
 			case 'ArrayTexture(4)':
 			case 'HTMLImage':
-				retArr.push(`getImage2D(${ markupName }, ${ markupName }Size, ${ markupName }Dim, `);
+				retArr.push(`getVec4FromSampler2D(${ markupName }, ${ markupName }Size, ${ markupName }Dim, `);
+				this.memberExpressionXYZ(xProperty, yProperty, zProperty, retArr);
+				retArr.push(')');
+				break;
+			case 'NumberTexture':
+			case 'Array':
+			case 'Array2D':
+			case 'Array3D':
+			case 'Array4D':
+			case 'Input':
+
+				if (this.precision === 'single') {
+					// bitRatio is always 4 here, javascript doesn't yet have 8 or 16 bit support
+					// TODO: make 8 or 16 bit work anyway!
+					retArr.push(`getMemoryOptimized32(${markupName}, ${markupName}Size, ${markupName}Dim, `);
+					this.memberExpressionXYZ(xProperty, yProperty, zProperty, retArr);
+					retArr.push(')');
+				} else {
+					const bitRatio = (origin === 'user' ?
+						this.lookupFunctionArgumentBitRatio(this.name, name) :
+						this.constantBitRatios[name]
+					);
+					switch (bitRatio) {
+						case 1:
+							retArr.push(`get8(${markupName}, ${markupName}Size, ${markupName}Dim, `);
+							break;
+						case 2:
+							retArr.push(`get16(${markupName}, ${markupName}Size, ${markupName}Dim, `);
+							break;
+						case 4:
+						case 0:
+							retArr.push(`get32(${markupName}, ${markupName}Size, ${markupName}Dim, `);
+							break;
+						default:
+							throw new Error(`unhandled bit ratio of ${ bitRatio}`);
+					}
+					this.memberExpressionXYZ(xProperty, yProperty, zProperty, retArr);
+					retArr.push(')');
+				}
+				break;
+			case 'MemoryOptimizedNumberTexture':
+				retArr.push(`getMemoryOptimized32(${ markupName }, ${ markupName }Size, ${ markupName }Dim, `);
 				this.memberExpressionXYZ(xProperty, yProperty, zProperty, retArr);
 				retArr.push(')');
 				break;
 			default:
-				retArr.push(`get(${ markupName }, ${ markupName }Size, ${ markupName }Dim, ${ markupName }BitRatio, `);
-				this.memberExpressionXYZ(xProperty, yProperty, zProperty, retArr);
-				retArr.push(')');
-				break;
+				throw new Error(`unhandled member expression "${ type }"`);
 		}
 		return retArr;
 	}
@@ -895,117 +1003,55 @@ class WebGLFunctionNode extends FunctionNode {
 		}
 
 		// Get the full function call, unrolled
-		let funcName = this.astMemberExpressionUnroll(ast.callee);
-		const isMathFunction = funcName.indexOf(jsMathPrefix) === 0;
+		let functionName = this.astMemberExpressionUnroll(ast.callee);
+		const isMathFunction = functionName.indexOf(jsMathPrefix) === 0;
 
 		// Its a math operator, remove the prefix
 		if (isMathFunction) {
-			funcName = funcName.slice(jsMathPrefix.length);
+			functionName = functionName.slice(jsMathPrefix.length);
 		}
 
 		// Its a local function, remove this
-		if (funcName.indexOf(localPrefix) === 0) {
-			funcName = funcName.slice(localPrefix.length);
+		if (functionName.indexOf(localPrefix) === 0) {
+			functionName = functionName.slice(localPrefix.length);
 		}
 
 		// if this if grows to more than one, lets use a switch
-		if (funcName === 'atan2') {
-			funcName = 'atan';
+		if (functionName === 'atan2') {
+			functionName = 'atan';
 		}
 
 		// Register the function into the called registry
-		if (this.calledFunctions.indexOf(funcName) < 0) {
-			this.calledFunctions.push(funcName);
-		}
-		if (!this.calledFunctionsArguments[funcName]) {
-			this.calledFunctionsArguments[funcName] = [];
+		if (this.calledFunctions.indexOf(functionName) < 0) {
+			this.calledFunctions.push(functionName);
 		}
 
-		const functionArguments = [];
-		this.calledFunctionsArguments[funcName].push(functionArguments);
-
-		if (funcName === 'random' && this.plugins && this.plugins.length > 0) {
+		if (functionName === 'random' && this.plugins && this.plugins.length > 0) {
 			for (let i = 0; i < this.plugins.length; i++) {
 				const plugin = this.plugins[i];
 				if (plugin.functionMatch === 'Math.random()' && plugin.functionReplace) {
-					functionArguments.push(plugin.functionReturnType);
 					retArr.push(plugin.functionReplace);
 					return retArr;
 				}
 			}
 		}
 
+		// track the function was called
+		if (this.onFunctionCall) {
+			this.onFunctionCall(this.name, functionName);
+		}
+
 		// Call the function
-		retArr.push(funcName);
+		retArr.push(functionName);
 
 		// Open arguments space
 		retArr.push('(');
 
 		// Add the arguments
-		if (this.nativeFunctionArgumentTypes && this.nativeFunctionArgumentTypes[funcName]) {
-			const nativeFunctionArgumentTypes = this.nativeFunctionArgumentTypes[funcName].types;
-			for (let i = 0; i < ast.arguments.length; ++i) {
-				const argument = ast.arguments[i];
-				const targetType = nativeFunctionArgumentTypes[i];
-				if (i > 0) {
-					retArr.push(', ');
-				}
-				const argumentType = this.getType(argument);
-				if (argumentType === 'Number' || argumentType === 'Float') {
-					if (targetType === 'Integer') {
-						retArr.push('int(');
-						this.astGeneric(argument, retArr);
-						retArr.push(')');
-						continue;
-					} else if (targetType === 'Number') {
-						this.astGeneric(argument, retArr);
-						continue;
-					}
-				} else if (argumentType === 'Integer') {
-					if (targetType === 'Number') {
-						retArr.push('float(');
-						this.astGeneric(argument, retArr);
-						retArr.push(')');
-						continue;
-					} else if (targetType === 'Integer') {
-						this.astGeneric(argument, retArr);
-						continue;
-					}
-				} else if (argumentType === 'Array(2)') {
-					if (targetType === 'Array(2)') {
-						this.astGeneric(argument, retArr);
-						continue;
-					}
-				} else if (argumentType === 'Array(3)') {
-					if (targetType === 'Array(3)') {
-						this.astGeneric(argument, retArr);
-						continue;
-					}
-				} else if (argumentType === 'Array(4)') {
-					if (targetType === 'Array(4)') {
-						this.astGeneric(argument, retArr);
-						continue;
-					}
-				} else if (argumentType === 'LiteralInteger') {
-					if (targetType === 'Integer') {
-						this.pushState('casting-to-integer');
-						this.astGeneric(argument, retArr);
-						this.popState('casting-to-integer');
-						continue;
-					} else if (targetType === 'Number') {
-						this.pushState('casting-to-float');
-						this.astGeneric(argument, retArr);
-						this.popState('casting-to-float');
-						continue;
-					}
-				}
-				throw new Error(`Unhandled argument combination of ${ argumentType } and ${ targetType }`);
-			}
-		} else if (isMathFunction) {
+		if (isMathFunction) {
 			for (let i = 0; i < ast.arguments.length; ++i) {
 				const argument = ast.arguments[i];
 				const argumentType = this.getType(argument);
-
 				if (i > 0) {
 					retArr.push(', ');
 				}
@@ -1018,31 +1064,89 @@ class WebGLFunctionNode extends FunctionNode {
 						retArr.push(')');
 						this.popState('casting-to-float');
 						break;
-					case 'LiteralInteger':
 					default:
 						this.astGeneric(argument, retArr);
 						break;
 				}
 			}
 		} else {
+			const targetTypes = this.lookupFunctionArgumentTypes(functionName) || [];
 			for (let i = 0; i < ast.arguments.length; ++i) {
 				const argument = ast.arguments[i];
+				let targetType = targetTypes[i];
 				if (i > 0) {
 					retArr.push(', ');
 				}
-				this.astGeneric(argument, retArr);
 				const argumentType = this.getType(argument);
-				if (argumentType) {
-					functionArguments.push({
-						name: argument.name || null,
-						type: argumentType
-					});
-				} else {
-					functionArguments.push(null);
+				if (!targetType) {
+					this.triggerImplyArgumentType(functionName, i, argumentType, this);
+					targetType = argumentType;
 				}
+				switch (argumentType) {
+					case 'Number':
+					case 'Float':
+						if (targetType === 'Integer') {
+							retArr.push('int(');
+							this.astGeneric(argument, retArr);
+							retArr.push(')');
+							continue;
+						} else if (targetType === 'Number' || targetType === 'Float') {
+							this.astGeneric(argument, retArr);
+							continue;
+						} else if (targetType === 'LiteralInteger') {
+							this.pushState('casting-to-float');
+							this.astGeneric(argument, retArr);
+							this.popState('casting-to-float');
+							continue;
+						}
+						break;
+					case 'Integer':
+						if (targetType === 'Number' || targetType === 'Float') {
+							retArr.push('float(');
+							this.astGeneric(argument, retArr);
+							retArr.push(')');
+							continue;
+						} else if (targetType === 'Integer') {
+							this.astGeneric(argument, retArr);
+							continue;
+						}
+						break;
+					case 'LiteralInteger':
+						if (targetType === 'Integer') {
+							this.pushState('casting-to-integer');
+							this.astGeneric(argument, retArr);
+							this.popState('casting-to-integer');
+							continue;
+						} else if (targetType === 'Number' || targetType === 'Float') {
+							this.pushState('casting-to-float');
+							this.astGeneric(argument, retArr);
+							this.popState('casting-to-float');
+							continue;
+						} else if (targetType === 'LiteralInteger') {
+							this.astGeneric(argument, retArr);
+							continue;
+						}
+						break;
+					case 'Array(2)':
+					case 'Array(3)':
+					case 'Array(4)':
+						if (targetType === argumentType) {
+							this.astGeneric(argument, retArr);
+							continue;
+						}
+						break;
+					case 'Array':
+					case 'Input':
+						if (targetType === argumentType) {
+							this.triggerTrackArgumentSynonym(this.name, argument.name, functionName, i);
+							this.astGeneric(argument, retArr);
+							continue;
+						}
+						break;
+				}
+				throw new Error(`Unhandled argument combination of ${ argumentType } and ${ targetType }`);
 			}
 		}
-
 		// Close arguments space
 		retArr.push(')');
 
@@ -1116,12 +1220,18 @@ const typeMap = {
 	'Array(4)': 'vec4',
 	'Array2D': 'sampler2D',
 	'Array3D': 'sampler2D',
+	'Boolean': 'bool',
 	'Float': 'float',
 	'Input': 'sampler2D',
 	'Integer': 'int',
 	'Number': 'float',
+	'LiteralInteger': 'float',
 	'NumberTexture': 'sampler2D',
-	'ArrayTexture(4)': 'sampler2D'
+	'MemoryOptimizedNumberTexture': 'sampler2D',
+	'ArrayTexture(1)': 'sampler2D',
+	'ArrayTexture(2)': 'sampler2D',
+	'ArrayTexture(3)': 'sampler2D',
+	'ArrayTexture(4)': 'sampler2D',
 };
 
 const operatorMap = {

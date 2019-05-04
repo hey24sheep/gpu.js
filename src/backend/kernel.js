@@ -28,12 +28,16 @@ class Kernel {
 		throw new Error(`"destroyContext" called on ${ this.name }`);
 	}
 
-	static nativeFunctionArgumentTypes() {
-		throw new Error(`"nativeFunctionArgumentTypes" called on ${ this.name }`);
+	static nativeFunctionArguments() {
+		throw new Error(`"nativeFunctionArguments" called on ${ this.name }`);
 	}
 
 	static nativeFunctionReturnType() {
 		throw new Error(`"nativeFunctionReturnType" called on ${ this.name }`);
+	}
+
+	static combineKernels() {
+		throw new Error(`"combineKernels" called on ${ this.name }`);
 	}
 
 	/**
@@ -51,6 +55,8 @@ class Kernel {
 			}
 		}
 
+		this.onRequestFallback = null;
+
 		/**
 		 * Name of the arguments found from parsing source argument
 		 * @type {String[]}
@@ -58,6 +64,10 @@ class Kernel {
 		this.argumentNames = typeof source === 'string' ? utils.getArgumentNamesFromString(source) : null;
 		this.argumentTypes = null;
 		this.argumentSizes = null;
+		this.argumentBitRatios = null;
+		this.argumentsLength = 0;
+		this.constantsLength = 0;
+
 
 		/**
 		 * The function source
@@ -95,7 +105,8 @@ class Kernel {
 		 */
 		this.constants = null;
 		this.constantTypes = null;
-		this.hardcodeConstants = null;
+		this.constantBitRatios = null;
+		this.hardcodeConstants = false;
 
 		/**
 		 *
@@ -137,8 +148,7 @@ class Kernel {
 		 *
 		 * @type {Boolean}
 		 */
-		this.skipValidate = false;
-		this.wraparound = null;
+		this.validate = true;
 
 		/**
 		 * Enforces kernel to write to a new array or texture on run
@@ -151,18 +161,30 @@ class Kernel {
 		 * @type {Boolean}
 		 */
 		this.pipeline = false;
+		this.precision = null;
 
 		this.plugins = null;
+
+		this.returnType = null;
+		this.leadingReturnStatement = null;
+		this.followingReturnStatement = null;
 	}
 
 	mergeSettings(settings) {
 		for (let p in settings) {
 			if (!settings.hasOwnProperty(p) || !this.hasOwnProperty(p)) continue;
+			if (p === 'output') {
+				if (!Array.isArray(settings.output)) {
+					this.setOutput(settings.output); // Flatten output object
+					continue;
+				}
+			} else if (p === 'functions' && typeof settings.functions[0] === 'function') {
+				this.functions = settings.functions.map(source => utils.functionToIFunction(source));
+				continue;
+			}
 			this[p] = settings[p];
 		}
-		if (settings.hasOwnProperty('output') && !Array.isArray(settings.output)) {
-			this.setOutput(settings.output); // Flatten output object
-		}
+
 		if (!this.canvas) this.canvas = this.initCanvas();
 		if (!this.context) this.context = this.initContext();
 		if (!this.plugins) this.plugins = this.initPlugins(settings);
@@ -218,13 +240,22 @@ class Kernel {
 	 * @param {IArguments} args - The actual parameters sent to the Kernel
 	 */
 	setupArguments(args) {
-		this.argumentTypes = [];
-		this.argumentSizes = [];
+		if (!this.argumentTypes) {
+			this.argumentTypes = [];
+			for (let i = 0; i < args.length; i++) {
+				const argType = utils.getVariableType(args[i]);
+				this.argumentTypes.push(argType === 'Integer' ? 'Number' : argType);
+			}
+		}
+
+		// setup sizes
+		this.argumentSizes = new Array(args.length);
+		this.argumentBitRatios = new Int32Array(args.length);
+
 		for (let i = 0; i < args.length; i++) {
 			const arg = args[i];
-			const argType = utils.getVariableType(arg);
-			this.argumentTypes.push(argType === 'Integer' ? 'Number' : argType);
-			this.argumentSizes.push(arg.constructor === Input ? arg.size : null);
+			this.argumentSizes[i] = arg.constructor === Input ? arg.size : null;
+			this.argumentBitRatios[i] = this.getBitRatio(arg);
 		}
 
 		if (this.argumentNames.length !== args.length) {
@@ -237,11 +268,23 @@ class Kernel {
 	 */
 	setupConstants() {
 		this.constantTypes = {};
+		this.constantBitRatios = {};
 		if (this.constants) {
 			for (let p in this.constants) {
 				this.constantTypes[p] = utils.getVariableType(this.constants[p]);
+				this.constantBitRatios[p] = this.getBitRatio(this.constants[p]);
 			}
 		}
+	}
+
+	/**
+	 *
+	 * @param flag
+	 * @returns {Kernel}
+	 */
+	setOptimizeFloatMemory(flag) {
+		this.optimizeFloatMemory = flag;
+		return this;
 	}
 
 	/**
@@ -301,11 +344,41 @@ class Kernel {
 	}
 
 	/**
+	 *
+	 * @param {IFunction[]|KernelFunction[]} functions
+	 * @returns {Kernel}
+	 */
+	setFunctions(functions) {
+		if (typeof functions[0] === 'function') {
+			this.functions = functions.map(source => utils.functionToIFunction(source));
+		} else {
+			this.functions = functions;
+		}
+		return this;
+	}
+
+	/**
 	 * Set writing to texture on/off
 	 * @param flag
 	 * @returns {Kernel}
 	 */
 	setPipeline(flag) {
+		this.pipeline = flag;
+		return this;
+	}
+
+	/**
+	 * Set precision to 'unsigned' or 'single'
+	 * @param {String} flag 'unsigned' or 'single'
+	 * @returns {Kernel}
+	 */
+	setPrecision(flag) {
+		this.precision = flag;
+		return this;
+	}
+
+	setOutputToTexture(flag) {
+		utils.warnDeprecated('method', 'setOutputToTexture', 'setPipeline');
 		this.pipeline = flag;
 		return this;
 	}
@@ -330,6 +403,24 @@ class Kernel {
 	}
 
 	/**
+	 * @deprecated
+	 * @returns {Object}
+	 */
+	getCanvas() {
+		utils.warnDeprecated('method', 'getCanvas');
+		return this.canvas;
+	}
+
+	/**
+	 * @deprecated
+	 * @returns {Object}
+	 */
+	getWebGl() {
+		utils.warnDeprecated('method', 'getWebGl');
+		return this.context;
+	}
+
+	/**
 	 * @desc Bind the webGL instance to kernel
 	 * @param {WebGLRenderingContext} context - webGl instance to bind
 	 */
@@ -341,6 +432,13 @@ class Kernel {
 	setArgumentTypes(argumentTypes) {
 		this.argumentTypes = argumentTypes;
 		return this;
+	}
+
+	requestFallback(args) {
+		if (!this.onRequestFallback) {
+			throw new Error(`"onRequestFallback" not defined on ${ this.constructor.name }`);
+		}
+		return this.onRequestFallback(args);
 	}
 
 	/**
@@ -391,6 +489,41 @@ class Kernel {
 		throw new Error(`"destroy" called on ${ this.constructor.name }`);
 	}
 
+	/**
+	 * bit storage ratio of source to target 'buffer', i.e. if 8bit array -> 32bit tex = 4
+	 * @param value
+	 * @returns {number}
+	 */
+	getBitRatio(value) {
+		if (this.precision === 'single') {
+			// 8 and 16 are upconverted to float32
+			return 4;
+		} else if (Array.isArray(value[0])) {
+			return this.getBitRatio(value[0]);
+		} else if (value.constructor === Input) {
+			return this.getBitRatio(value.value);
+		}
+		switch (value.constructor) {
+			case Uint8Array:
+			case Int8Array:
+				return 1;
+			case Uint16Array:
+			case Int16Array:
+				return 2;
+			case Float32Array:
+			case Int32Array:
+			default:
+				return 4;
+		}
+	}
+
+	/**
+	 * @returns {number[]}
+	 */
+	getPixels() {
+		throw new Error(`"getPixels" called on ${ this.constructor.name }`);
+	}
+
 	checkOutput() {
 		if (!this.output || !Array.isArray(this.output)) throw new Error('kernel.output not an array');
 		if (this.output.length < 1) throw new Error('kernel.output is empty, needs at least 1 value');
@@ -412,6 +545,7 @@ class Kernel {
 			constants: this.constants,
 			constantsLength: this.constantsLength,
 			pluginNames: this.plugins ? this.plugins.map(plugin => plugin.name) : null,
+			returnType: this.returnType,
 		};
 		return {
 			settings

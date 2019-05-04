@@ -7,7 +7,7 @@ export class GPU {
   static isKernelMapSupported: boolean;
   static isOffscreenCanvasSupported: boolean;
   static isGPUHTMLImageArraySupported: boolean;
-  static isFloatOutputSupported: boolean;
+  static isSinglePrecisionSupported: boolean;
   constructor(settings?: IGPUSettings);
   functions: IGPUFunction[];
   nativeFunctions: IGPUNativeFunction[];
@@ -15,7 +15,7 @@ export class GPU {
   addNativeFunction(name: string, source: string): this;
   combineKernels(...kernels: Function[]): KernelFunction;
   createKernel(kernel: KernelFunction, settings?: IKernelSettings): IKernelRunShortcut;
-  createKernelMap(subKernels: Object | Array<Function>, rootKernel: Function): IKernelRunShortcut;
+  createKernelMap(subKernels: Object | Array<Function>, rootKernel: Function, settings?: IKernelSettings): IKernelRunShortcut;
   destroy(): void;
   Kernel: typeof Kernel;
   mode: string;
@@ -46,6 +46,7 @@ export interface IGPUSettings {
   context?: object;
   functions?: KernelFunction[];
   nativeFunctions?: INativeFunctionList;
+  format: 'Float32Array' | 'Float16Array' | 'Float'
 }
 
 export type GPUVariableType
@@ -56,6 +57,8 @@ export type GPUVariableType
   | 'HTMLImage'
   | 'HTMLImageArray'
   | 'Number'
+  | 'Float'
+  | 'Integer'
   | GPUTextureType;
 
 export type GPUTextureType
@@ -67,18 +70,21 @@ export interface IGPUArgumentTypes {
 }
 
 export interface IGPUFunctionSettings {
-  argumentTypes?: IGPUArgumentTypes,
+  argumentTypes?: IGPUArgumentTypes | string[],
   returnType: GPUVariableType;
 }
 
-export class Kernel {
+export abstract class Kernel {
   static isSupported: boolean;
   static isContextMatch(context: any): boolean;
-  static nativeFunctionArgumentTypes(source: string): IArgumentTypes;
+  static disableValidation(): void;
+  static enableValidation(): void;
+  static nativeFunctionArguments(source: string): IArgumentTypes;
   static nativeFunctionReturnType(source: string): string;
   static destroyContext(context: any): void;
   static features: IKernelFeatures;
   source: string | object;
+  Kernel: Kernel;
   output: number[];
   debug: boolean;
   graphical: boolean;
@@ -90,10 +96,11 @@ export class Kernel {
   nativeFunctions: INativeFunctionList[];
   subKernels: ISubKernel[];
   skipValidate: boolean;
-  wraparound: boolean;
   immutable: boolean;
   pipeline: boolean;
   plugins: IPlugin[];
+  getPixels: number[];
+  constructor(kernel: KernelFunction, settings?: IKernelSettings); // TODO: JSON support
   build(
     arg1?: KernelVariable,
     arg2?: KernelVariable,
@@ -146,14 +153,30 @@ export class Kernel {
   setLoopMaxIterations(flag: number): this;
   setConstants(flag: object): this;
   setPipeline(flag: boolean): this;
+  setPrecision(flag: Precision): this;
   setImmutable(flag: boolean): this;
   setCanvas(flag: any): this;
   setContext(flag: any): this;
+  setFunctions(flag: IFunction[]|KernelFunction[]): this;
+}
+
+export type Precision = 'single' | 'unsigned';
+
+export class WebGLKernel extends Kernel {
+
+}
+
+export class WebGL2Kernel extends Kernel {
+
+}
+
+export class HeadlessGLKernel extends Kernel {
+
 }
 
 export interface IArgumentTypes {
-  names: string[],
-  types: string[],
+  argumentTypes: string[],
+  argumentNames: string[],
 }
 
 export interface IConstants {
@@ -176,12 +199,14 @@ export interface IKernelXYZ {
 
 export interface IKernelSettings {
   output: number[] | IKernelXYZ;
+  precision: 'single' | 'unsigned';
   constants?: object;
   context?: any;
   canvas?: any;
   pipeline?: boolean;
   immutable?: boolean;
   graphical?: boolean;
+  onRequestFallback?: () => Kernel;
 }
 
 export interface IKernelRunShortcut extends Kernel {
@@ -219,6 +244,10 @@ export interface IKernelFunctionThis {
   output: IKernelXYZ;
   thread: IKernelXYZ;
   constants: IConstantsThis;
+  color(r: number): void,
+  color(r: number, g: number): void,
+  color(r: number, g: number, b: number): void,
+  color(r: number, g: number, b: number, a: number): void,
 }
 
 export type KernelVariable = number | number[] | number[][] | number[][][] | Texture | HTMLImageElement | HTMLImageElement[];
@@ -271,12 +300,8 @@ export interface IFunctionSettings {
   isRootKernel?: boolean;
   isSubKernel?: boolean;
   onNestedFunction?(source: string, returnType: string): void;
-  lookupReturnType?(functionName: string): void;
-  nativeFunctionReturnTypes?: string[],
-  nativeFunctionArgumentTypes?: IGPUArgumentTypes[],
+  lookupReturnType?(functionName: string, ast: any, node: FunctionNode): void;
   plugins?: any[];
-  pluginNames?: string[];
-  parent?: FunctionNode
 }
 
 export interface ISubKernel {
@@ -298,10 +323,11 @@ export class FunctionBuilder {
 
 
 export interface IFunctionBuilderSettings {
+  kernel: Kernel;
   rootNode: FunctionNode;
   functionNodes?: FunctionNode[];
-  subKernelNodes?: FunctionNode[];
   nativeFunctions?: INativeFunctionList;
+  subKernelNodes?: FunctionNode[];
 }
 
 // These are mostly internal
@@ -339,3 +365,13 @@ export interface IPlugin {
   functionReturnType: GPUVariableType;
   onBeforeRun: (kernel: Kernel) => void;
 }
+
+export type OutputDimensions = [number, number, number];
+export type TextureDimensions = [number, number];
+
+export class Input {
+  value: number[];
+  size: number[];
+  constructor(value: number[], size: OutputDimensions);
+}
+export type input = (value: number[], size: OutputDimensions) => Input;

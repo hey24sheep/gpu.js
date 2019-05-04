@@ -42,7 +42,9 @@ function functionCompositionFunctionNode(FunctionNode) {
     
     return inner();
   }`, {
-    output
+    output,
+    lookupReturnType: () => 'Number',
+    lookupFunctionArgumentTypes: () => {}
   });
 
   return node.toString();
@@ -80,6 +82,7 @@ function numberFunctionCompositionFunctionBuilder(FunctionNode) {
     argumentTypes: [],
     argumentNames: [],
     output,
+    leadingReturnStatement: 'resultX[x] = '
   }, FunctionNode);
 
   return builder.getPrototypeString('kernel');
@@ -89,7 +92,7 @@ test('CPUFunctionNode', () => {
   assert.equal(numberFunctionCompositionFunctionBuilder(CPUFunctionNode), 'function inner() {'
     + '\nreturn 1;'
     + '\n}'
-    + '\nkernelResult = inner();');
+    + '\nresultX[x] = inner();\ncontinue;');
 });
 test('WebGLFunctionNode', () => {
   assert.equal(numberFunctionCompositionFunctionBuilder(WebGLFunctionNode), 'float inner() {'
@@ -123,6 +126,7 @@ function array2FunctionCompositionFunctionBuilder(FunctionNode) {
     argumentTypes: [],
     argumentNames: [],
     output,
+    leadingReturnStatement: 'resultX[x] = '
   }, FunctionNode);
 
   return builder.getPrototypeString('kernel');
@@ -132,7 +136,7 @@ test('CPUFunctionNode', () => {
   assert.equal(array2FunctionCompositionFunctionBuilder(CPUFunctionNode), 'function inner() {'
     + '\nreturn [1, 2, 3, 4];'
     + '\n}'
-    + '\nkernelResult = inner()[0];');
+    + '\nresultX[x] = inner()[0];\ncontinue;');
 });
 test('WebGLFunctionNode', () => {
   assert.equal(array2FunctionCompositionFunctionBuilder(WebGLFunctionNode), 'vec4 inner() {'
